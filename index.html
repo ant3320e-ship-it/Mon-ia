@@ -1,0 +1,555 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<title>Mon IA</title>
+<meta name="description" content="Ton IA open source, qui tourne directement sur ton téléphone.">
+<meta name="theme-color" content="#6D5DFC">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon.svg">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<style>
+  /* Layout: one-screen chat app — header, scrolling thread, composer; settings in a sheet. */
+  :root {
+    --bg: #F6F7FB; --surface: #FFFFFF; --text: #111827; --muted: #6B7280; --border: #E5E7EB;
+    --primary: #6D5DFC; --on-primary: #FFFFFF; --soft: #ECE9FF; --danger: #DC2626;
+    --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0B1020; --surface: #151B2E; --text: #F3F4F6; --muted: #9CA3AF; --border: #262F4A;
+      --primary: #8B7FFF; --soft: #1E1A4A; --danger: #F87171; color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--text); font: 16px/1.45 var(--font);
+    display: flex; flex-direction: column; overflow: hidden;
+    padding: env(safe-area-inset-top, 0px) 0 0;
+  }
+  button { font: inherit; cursor: pointer; }
+  button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+
+  header {
+    display: flex; align-items: center; gap: 10px; padding: 12px 16px;
+    border-bottom: 1px solid var(--border); background: var(--bg);
+  }
+  .avatar {
+    width: 38px; height: 38px; border-radius: 50%; background: var(--primary); color: var(--on-primary);
+    display: grid; place-items: center; font-weight: 700; font-size: 17px; flex: none;
+  }
+  .who { flex: 1; min-width: 0; }
+  .who b { display: block; font-size: 17px; }
+  .who small { display: block; color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .link { background: none; border: 0; color: var(--primary); font-weight: 600; padding: 4px 6px; }
+
+  #thread { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+  .msg {
+    max-width: 85%; padding: 10px 14px; border-radius: 18px; white-space: pre-wrap; overflow-wrap: anywhere;
+  }
+  .msg.user { align-self: flex-end; background: var(--primary); color: var(--on-primary); border-bottom-right-radius: 4px; }
+  .msg.assistant { align-self: flex-start; background: var(--surface); border: 1px solid var(--border); border-bottom-left-radius: 4px; }
+  .msg a { color: inherit; }
+  .sources { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); font-size: 13px; color: var(--muted); }
+  .sources a { color: var(--primary); }
+  .typing { display: inline-flex; gap: 4px; }
+  .typing i { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); animation: blink 1.2s infinite; }
+  .typing i:nth-child(2) { animation-delay: .2s; } .typing i:nth-child(3) { animation-delay: .4s; }
+  @keyframes blink { 0%, 80%, 100% { opacity: .25 } 40% { opacity: 1 } }
+
+  .empty { margin: auto; text-align: center; max-width: 34ch; padding: 24px 8px; }
+  .empty h1 { font-size: 21px; margin: 0 0 8px; text-wrap: balance; }
+  .empty p { color: var(--muted); margin: 0; }
+
+  /* Download / setup card */
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 18px; margin: auto; width: 100%; max-width: 420px; display: grid; gap: 12px; }
+  .card h1 { font-size: 20px; margin: 0; text-wrap: balance; }
+  .card p { margin: 0; color: var(--muted); font-size: 14px; }
+  .bar { height: 10px; background: var(--soft); border-radius: 99px; overflow: hidden; }
+  .bar > div { height: 100%; width: 0; background: var(--primary); transition: width .3s; }
+  .progress-text { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  .btn { background: var(--primary); color: var(--on-primary); border: 0; border-radius: 12px; padding: 12px 16px; font-weight: 700; }
+  .btn.secondary { background: none; color: var(--primary); border: 1px solid var(--primary); }
+  .btn:disabled { opacity: .45; cursor: default; }
+
+  #status { color: var(--muted); font-size: 13px; font-style: italic; padding: 0 16px 6px; }
+  #error { color: var(--danger); font-size: 13px; padding: 0 16px 8px; }
+
+  form#composer {
+    display: flex; align-items: flex-end; gap: 8px; padding: 10px 12px calc(12px + env(safe-area-inset-bottom, 0px));
+    border-top: 1px solid var(--border); background: var(--surface);
+  }
+  #input {
+    flex: 1; min-width: 0; resize: none; max-height: 140px; min-height: 44px; border-radius: 22px; border: 0;
+    padding: 11px 16px; background: var(--bg); color: var(--text); font: inherit;
+  }
+  #send { height: 44px; border-radius: 22px; padding: 0 16px; }
+  .web-toggle {
+    height: 44px; width: 44px; border-radius: 50%; border: 1px solid var(--border); background: var(--bg);
+    display: grid; place-items: center; font-size: 18px; flex: none; opacity: .45;
+  }
+  .web-toggle[aria-pressed="true"] { opacity: 1; border-color: var(--primary); background: var(--soft); }
+
+  /* Settings sheet */
+  dialog { border: 0; padding: 0; width: 100%; max-width: 520px; max-height: 100%; height: 100%; margin: 0 auto; background: var(--bg); color: var(--text); }
+  dialog::backdrop { background: rgba(0,0,0,.4); }
+  .sheet { display: flex; flex-direction: column; height: 100%; }
+  .sheet header { padding-top: calc(12px + env(safe-area-inset-top, 0px)); justify-content: space-between; }
+  .sheet .body { overflow-y: auto; padding: 8px 16px 32px; display: grid; gap: 6px; }
+  .sheet h2 { font-size: 19px; margin: 16px 0 4px; }
+  label { color: var(--muted); font-size: 13px; margin-top: 8px; }
+  .field { width: 100%; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; font: inherit; }
+  textarea.field { min-height: 130px; resize: vertical; }
+  .hint { color: var(--muted); font-size: 12px; margin: 2px 0 0; }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 8px; }
+  .row span { font-weight: 600; }
+  input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--primary); }
+
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+  <header>
+    <div class="avatar" id="avatar">N</div>
+    <div class="who"><b id="name">Nova</b><small id="sub">Chargement…</small></div>
+    <button class="link" id="clear" type="button">Effacer</button>
+    <button class="link" id="open-settings" type="button">Réglages</button>
+  </header>
+
+  <main id="thread" aria-live="polite"></main>
+  <div id="status" hidden></div>
+  <div id="error" hidden></div>
+
+  <form id="composer">
+    <button class="web-toggle" id="web" type="button" aria-pressed="true" title="Recherche sur Internet">🌐</button>
+    <textarea id="input" rows="1" placeholder="Écris à Nova…" disabled></textarea>
+    <button class="btn" id="send" type="submit" disabled>Envoyer</button>
+  </form>
+
+  <dialog id="settings">
+    <form class="sheet" method="dialog" id="settings-form">
+      <header>
+        <button class="link" value="cancel" type="submit">Annuler</button>
+        <b>Réglages</b>
+        <button class="link" value="save" type="submit" style="font-weight:700">Enregistrer</button>
+      </header>
+      <div class="body">
+        <h2>Personnalité</h2>
+        <label for="s-name">Nom de ton IA</label>
+        <input class="field" id="s-name" maxlength="30">
+        <label for="s-prompt">Consignes (qui elle est, son ton, ce qu'elle doit faire)</label>
+        <textarea class="field" id="s-prompt"></textarea>
+        <p class="hint">Écris {nom} pour insérer le nom de ton IA.</p>
+        <label for="s-temp">Créativité : <output id="s-temp-out"></output></label>
+        <input id="s-temp" type="range" min="0" max="1.5" step="0.1">
+
+        <h2>Modèle</h2>
+        <label for="s-model">Modèle open source (tourne sur ton téléphone)</label>
+        <select class="field" id="s-model"></select>
+        <p class="hint">Téléchargé une seule fois, puis disponible même hors ligne. Plus le modèle est gros, plus il est intelligent, mais il faut un téléphone puissant.</p>
+
+        <h2>Internet</h2>
+        <div class="row"><span>Rechercher avant de répondre</span><input type="checkbox" id="s-web"></div>
+        <p class="hint">Cherche dans Wikipédia et lit les liens que tu envoies, puis donne les infos trouvées à l'IA avec les sources.</p>
+
+        <h2>Données</h2>
+        <button class="btn secondary" type="button" id="delete-models">Supprimer les modèles téléchargés</button>
+        <p class="hint">Libère l'espace sur le téléphone. Il faudra retélécharger le modèle.</p>
+      </div>
+    </form>
+  </dialog>
+
+<script type="module">
+const WEBLLM_URL = "https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm@0.2.79/+esm";
+
+const MODELS = [
+  { key: "qwen-1.5b", label: "Qwen 2.5 1.5B — recommandé (~1 Go)", size: "environ 1 Go", base: "Qwen2.5-1.5B-Instruct" },
+  { key: "qwen-0.5b", label: "Qwen 2.5 0.5B — léger (~400 Mo)", size: "environ 400 Mo", base: "Qwen2.5-0.5B-Instruct" },
+  { key: "llama-1b", label: "Llama 3.2 1B — léger (~800 Mo)", size: "environ 800 Mo", base: "Llama-3.2-1B-Instruct" },
+  { key: "llama-3b", label: "Llama 3.2 3B — le plus intelligent (~2 Go)", size: "environ 2 Go", base: "Llama-3.2-3B-Instruct" },
+];
+
+const DEFAULTS = {
+  name: "Nova",
+  prompt:
+    "Tu es {nom}, une IA personnelle unique, bienveillante, curieuse et directe. " +
+    "Tu réponds toujours en français, de façon claire et concise. " +
+    "Si on te donne des informations trouvées sur Internet, appuie-toi dessus. " +
+    "Si tu ne sais pas, dis-le franchement plutôt que d'inventer.",
+  temperature: 0.7,
+  model: "qwen-1.5b",
+  web: true,
+};
+
+const $ = (id) => document.getElementById(id);
+const store = {
+  get(key, fallback) { try { const v = localStorage.getItem("mon-ia:" + key); return v ? JSON.parse(v) : fallback; } catch { return fallback; } },
+  set(key, value) { try { localStorage.setItem("mon-ia:" + key, JSON.stringify(value)); } catch {} },
+};
+
+let settings = { ...DEFAULTS, ...store.get("settings", {}) };
+let messages = store.get("messages", []);
+let webllm = null;
+let engine = null;
+let loadedModelId = null;
+let generating = false;
+let f16 = true;
+
+/* ---------- Rendu ---------- */
+function modelInfo() { return MODELS.find((m) => m.key === settings.model) ?? MODELS[0]; }
+function modelId() { return `${modelInfo().base}-${f16 ? "q4f16_1" : "q4f32_1"}-MLC`; }
+
+function renderHeader() {
+  $("name").textContent = settings.name;
+  $("avatar").textContent = (settings.name[0] || "?").toUpperCase();
+  $("input").placeholder = `Écris à ${settings.name}…`;
+  $("web").setAttribute("aria-pressed", String(settings.web));
+  $("sub").textContent = engine ? `${modelInfo().base} · sur ton téléphone${settings.web ? " · 🌐" : ""}` : $("sub").textContent;
+}
+
+function linkify(text, el) {
+  const parts = text.split(/(https?:\/\/[^\s)]+)/g);
+  for (const part of parts) {
+    if (/^https?:\/\//.test(part)) {
+      const a = document.createElement("a");
+      a.href = part; a.textContent = part; a.target = "_blank"; a.rel = "noopener";
+      el.append(a);
+    } else el.append(part);
+  }
+}
+
+function bubble(msg) {
+  const div = document.createElement("div");
+  div.className = `msg ${msg.role}`;
+  if (msg.content) linkify(msg.content, div);
+  else div.innerHTML = '<span class="typing"><i></i><i></i><i></i></span>';
+  if (msg.sources?.length) {
+    const s = document.createElement("div");
+    s.className = "sources";
+    s.append("Sources : ");
+    msg.sources.forEach((src, i) => {
+      if (i) s.append(" · ");
+      const a = document.createElement("a");
+      a.href = src.url; a.textContent = src.title; a.target = "_blank"; a.rel = "noopener";
+      s.append(a);
+    });
+    div.append(s);
+  }
+  return div;
+}
+
+function renderThread() {
+  const thread = $("thread");
+  if (!engine) return;
+  thread.replaceChildren();
+  if (!messages.length) {
+    const e = document.createElement("div");
+    e.className = "empty";
+    e.innerHTML = `<h1></h1><p>Je tourne directement sur ton téléphone avec un modèle open source. Aucun serveur, aucune API : tes messages restent ici.</p>`;
+    e.querySelector("h1").textContent = `Bonjour, je suis ${settings.name} 👋`;
+    thread.append(e);
+  }
+  for (const m of messages) thread.append(bubble(m));
+  thread.scrollTop = thread.scrollHeight;
+}
+
+function setStatus(text) { $("status").hidden = !text; $("status").textContent = text || ""; }
+function setError(text) { $("error").hidden = !text; $("error").textContent = text || ""; }
+
+/* ---------- Écran de téléchargement ---------- */
+function showSetup({ title, text, button, onClick, progress }) {
+  const thread = $("thread");
+  thread.replaceChildren();
+  const card = document.createElement("div");
+  card.className = "card";
+  const h = document.createElement("h1"); h.textContent = title;
+  const p = document.createElement("p"); p.textContent = text;
+  card.append(h, p);
+  if (progress) {
+    card.insertAdjacentHTML("beforeend", '<div class="bar"><div id="bar"></div></div><div class="progress-text" id="progress-text">Préparation…</div>');
+  }
+  if (button) {
+    const b = document.createElement("button");
+    b.className = "btn"; b.type = "button"; b.textContent = button;
+    b.addEventListener("click", onClick);
+    card.append(b);
+  }
+  thread.append(card);
+}
+
+async function checkWebGPU() {
+  if (!("gpu" in navigator)) return "no-webgpu";
+  try {
+    const adapter = await navigator.gpu.requestAdapter();
+    if (!adapter) return "no-adapter";
+    f16 = adapter.features.has("shader-f16");
+    return "ok";
+  } catch { return "no-adapter"; }
+}
+
+async function loadModel() {
+  setError(null);
+  const id = modelId();
+  showSetup({
+    title: `Téléchargement de ${modelInfo().base}`,
+    text: "Une seule fois : ensuite ton IA démarre en quelques secondes, même sans connexion. Garde cette page ouverte.",
+    progress: true,
+  });
+  $("sub").textContent = "Téléchargement du modèle…";
+  try {
+    webllm ??= await import(WEBLLM_URL);
+    const onProgress = (r) => {
+      const bar = $("bar"), txt = $("progress-text");
+      if (bar) bar.style.width = `${Math.round((r.progress || 0) * 100)}%`;
+      if (txt) txt.textContent = frenchProgress(r.text, r.progress);
+    };
+    if (engine) {
+      engine.setInitProgressCallback(onProgress);
+      await engine.reload(id);
+    } else {
+      engine = await webllm.CreateMLCEngine(id, { initProgressCallback: onProgress });
+    }
+    loadedModelId = id;
+    store.set("ready", true);
+    $("input").disabled = false;
+    $("send").disabled = false;
+    renderHeader();
+    renderThread();
+    $("input").focus();
+  } catch (e) {
+    console.error(e);
+    const msg = String(e?.message || e);
+    const memory = /memory|OOM|allocate|device lost|Device was lost/i.test(msg);
+    engine = null;
+    showSetup({
+      title: memory ? "Ton téléphone manque de mémoire pour ce modèle" : "Le téléchargement a échoué",
+      text: memory
+        ? "Choisis un modèle plus léger dans Réglages → Modèle (par exemple Qwen 2.5 0.5B), puis réessaie."
+        : `Vérifie ta connexion puis réessaie. Détail : ${msg.slice(0, 200)}`,
+      button: "Réessayer",
+      onClick: loadModel,
+    });
+    $("sub").textContent = "Modèle non chargé";
+  }
+}
+
+function frenchProgress(text = "", progress = 0) {
+  const pct = Math.round(progress * 100);
+  const mb = text.match(/(\d+)MB/);
+  if (/Fetching|Loading model from cache|cache\[/i.test(text) || mb) {
+    return `${pct} %${mb ? ` · ${mb[1]} Mo` : ""}`;
+  }
+  if (/shader|GPU|compil/i.test(text)) return `Préparation du processeur graphique… ${pct} %`;
+  if (/Finish/i.test(text)) return "Prêt !";
+  return `${pct} %`;
+}
+
+/* ---------- Internet (Wikipédia + lecture de liens) ---------- */
+async function wikipediaSearch(query) {
+  const url = "https://fr.wikipedia.org/w/api.php?" + new URLSearchParams({
+    action: "query", generator: "search", gsrsearch: query, gsrlimit: "3",
+    prop: "extracts|info", inprop: "url", exintro: "1", explaintext: "1", exlimit: "3",
+    format: "json", origin: "*",
+  });
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Wikipédia HTTP ${res.status}`);
+  const data = await res.json();
+  return Object.values(data.query?.pages ?? {})
+    .sort((a, b) => a.index - b.index)
+    .map((p) => ({ title: p.title, url: p.fullurl, text: (p.extract || "").slice(0, 1200) }))
+    .filter((p) => p.text);
+}
+
+async function readLink(url) {
+  // r.jina.ai renvoie le texte d'une page web et autorise les pages comme celle-ci à le lire.
+  const res = await fetch(`https://r.jina.ai/${url}`, { headers: { Accept: "text/plain" } });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const text = await res.text();
+  const title = text.match(/^Title:\s*(.+)$/m)?.[1] ?? url;
+  const body = text.split(/Markdown Content:\s*/)[1] ?? text;
+  return { title, url, text: body.replace(/!\[[^\]]*\]\([^)]*\)/g, "").slice(0, 2500) };
+}
+
+async function gatherWebContext(question) {
+  const urls = question.match(/https?:\/\/[^\s)]+/g) ?? [];
+  const found = [];
+  for (const url of urls.slice(0, 2)) {
+    setStatus(`📄 Lecture : ${url}`);
+    try { found.push(await readLink(url)); } catch {}
+  }
+  const words = question.replace(/https?:\/\/\S+/g, "").trim().split(/\s+/).filter(Boolean);
+  if (words.length >= 3) {
+    const query = question.replace(/https?:\/\/\S+/g, "").replace(/[?!.]+$/, "");
+    setStatus(`🔎 Recherche : ${query.slice(0, 60)}`);
+    try { found.push(...(await wikipediaSearch(query))); } catch {}
+  }
+  return found;
+}
+
+/* ---------- Conversation ---------- */
+function systemPrompt() {
+  const today = new Date().toLocaleDateString("fr-FR", { dateStyle: "full" });
+  return `${settings.prompt.replaceAll("{nom}", settings.name)}\n\nNous sommes le ${today}.`;
+}
+
+async function send(text) {
+  if (!engine || generating || !text.trim()) return;
+  setError(null);
+  generating = true;
+  $("send").textContent = "Stop";
+  const user = { role: "user", content: text.trim() };
+  const reply = { role: "assistant", content: "" };
+  messages.push(user, reply);
+  renderThread();
+
+  try {
+    let context = [];
+    if (settings.web) context = await gatherWebContext(user.content);
+    reply.sources = context.map(({ title, url }) => ({ title, url }));
+    setStatus(context.length ? "✍️ Rédaction de la réponse…" : null);
+
+    const history = messages.slice(0, -2).slice(-10).map(({ role, content }) => ({ role, content }));
+    const question = context.length
+      ? `Informations trouvées sur Internet :\n\n${context.map((c, i) => `[${i + 1}] ${c.title}\n${c.text}`).join("\n\n")}\n\n---\nEn t'appuyant sur ces informations si elles sont utiles, réponds à : ${user.content}`
+      : user.content;
+
+    const stream = await engine.chat.completions.create({
+      messages: [{ role: "system", content: systemPrompt() }, ...history, { role: "user", content: question }],
+      temperature: settings.temperature,
+      stream: true,
+    });
+    const thread = $("thread");
+    let el = thread.lastElementChild;
+    for await (const chunk of stream) {
+      const delta = chunk.choices[0]?.delta?.content;
+      if (!delta) continue;
+      reply.content += delta;
+      const next = bubble(reply);
+      el.replaceWith(next);
+      el = next;
+      thread.scrollTop = thread.scrollHeight;
+    }
+  } catch (e) {
+    console.error(e);
+    setError(`Erreur : ${String(e?.message || e).slice(0, 200)}`);
+  } finally {
+    if (!reply.content) messages = messages.filter((m) => m !== reply);
+    generating = false;
+    setStatus(null);
+    $("send").textContent = "Envoyer";
+    store.set("messages", messages);
+    renderThread();
+  }
+}
+
+/* ---------- Événements ---------- */
+$("composer").addEventListener("submit", (e) => {
+  e.preventDefault();
+  if (generating) { engine?.interruptGenerate(); return; }
+  const text = $("input").value;
+  $("input").value = "";
+  autoGrow();
+  send(text);
+});
+$("input").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey && !matchMedia("(pointer: coarse)").matches) {
+    e.preventDefault();
+    $("composer").requestSubmit();
+  }
+});
+function autoGrow() { const i = $("input"); i.style.height = "auto"; i.style.height = Math.min(i.scrollHeight, 140) + "px"; }
+$("input").addEventListener("input", autoGrow);
+
+$("web").addEventListener("click", () => {
+  settings.web = !settings.web;
+  store.set("settings", settings);
+  renderHeader();
+});
+
+$("clear").addEventListener("click", () => {
+  if (generating) engine?.interruptGenerate();
+  messages = [];
+  store.set("messages", messages);
+  setError(null);
+  renderThread();
+});
+
+const dialog = $("settings");
+$("open-settings").addEventListener("click", () => {
+  $("s-name").value = settings.name;
+  $("s-prompt").value = settings.prompt;
+  $("s-temp").value = settings.temperature;
+  $("s-temp-out").textContent = settings.temperature;
+  $("s-web").checked = settings.web;
+  $("s-model").replaceChildren(...MODELS.map((m) => new Option(m.label, m.key, false, m.key === settings.model)));
+  dialog.showModal();
+});
+$("s-temp").addEventListener("input", (e) => ($("s-temp-out").textContent = e.target.value));
+dialog.addEventListener("close", () => {
+  if (dialog.returnValue !== "save") return;
+  const previousModel = settings.model;
+  settings = {
+    ...settings,
+    name: $("s-name").value.trim() || DEFAULTS.name,
+    prompt: $("s-prompt").value.trim() || DEFAULTS.prompt,
+    temperature: Number($("s-temp").value),
+    web: $("s-web").checked,
+    model: $("s-model").value,
+  };
+  store.set("settings", settings);
+  renderHeader();
+  if (settings.model !== previousModel) {
+    $("input").disabled = true; $("send").disabled = true;
+    loadModel();
+  } else renderThread();
+});
+$("delete-models").addEventListener("click", async () => {
+  try {
+    webllm ??= await import(WEBLLM_URL);
+    for (const m of MODELS) for (const q of ["q4f16_1", "q4f32_1"]) {
+      await webllm.deleteModelAllInfoInCache(`${m.base}-${q}-MLC`).catch(() => {});
+    }
+    $("delete-models").textContent = "Modèles supprimés";
+  } catch {
+    $("delete-models").textContent = "Suppression impossible";
+  }
+});
+
+/* ---------- Démarrage ---------- */
+async function start() {
+  renderHeader();
+  const gpu = await checkWebGPU();
+  if (gpu !== "ok") {
+    $("sub").textContent = "Navigateur non compatible";
+    showSetup({
+      title: "Ce navigateur ne peut pas faire tourner l'IA",
+      text:
+        "Il faut WebGPU, qui permet d'utiliser la puce graphique du téléphone. " +
+        "Sur Android : ouvre cette page dans Google Chrome (à jour). " +
+        "Sur iPhone : mets à jour vers iOS 26 et utilise Safari. " +
+        "Sur ordinateur : Chrome ou Edge récents.",
+    });
+    return;
+  }
+  webllm = await import(WEBLLM_URL).catch(() => null);
+  const cached = webllm ? await webllm.hasModelInCache(modelId()).catch(() => false) : false;
+  if (cached) return loadModel();
+  showSetup({
+    title: `Fais naître ${settings.name} sur ton téléphone`,
+    text:
+      `Ton IA va télécharger son cerveau open source, ${modelInfo().base} (${modelInfo().size}). ` +
+      "Une seule fois : ensuite elle tourne directement sur ton téléphone, sans serveur ni API, même hors ligne. " +
+      "Conseil : connecte-toi au Wi-Fi.",
+    button: "Télécharger et démarrer",
+    onClick: loadModel,
+  });
+  $("sub").textContent = "Prête à être téléchargée";
+}
+start();
+</script>
+</body>
+</html>

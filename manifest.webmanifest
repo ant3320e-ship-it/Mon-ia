@@ -1,0 +1,12 @@
+{
+  "name": "Mon IA",
+  "short_name": "Mon IA",
+  "description": "Ton IA open source, qui tourne directement sur ton téléphone.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0B1020",
+  "theme_color": "#6D5DFC",
+  "lang": "fr",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}

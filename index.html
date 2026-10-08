@@ -291,50 +291,67 @@ async function checkWebGPU() {
   } catch { return "no-adapter"; }
 }
 
-async function loadModel() {
+// Contexte réduit (2048 jetons) : moins de mémoire, donc moins de risque que
+// l'iPhone coupe le moteur.
+const CHAT_OPTS = { context_window_size: 2048 };
+
+/** Charge le modèle. quiet = redémarrage discret (le fil reste affiché). Renvoie true si prêt. */
+async function loadModel({ quiet = false } = {}) {
   setError(null);
   const id = modelId();
-  showSetup({
+  if (quiet) setStatus("♻️ Redémarrage de l'IA…");
+  else showSetup({
     title: `Téléchargement de ${modelInfo().base}`,
     text: "Une seule fois : ensuite ton IA démarre en quelques secondes, même sans connexion. Garde cette page ouverte.",
     progress: true,
   });
-  $("sub").textContent = "Téléchargement du modèle…";
+  $("sub").textContent = quiet ? "Redémarrage…" : "Téléchargement du modèle…";
+  $("input").disabled = true;
+  $("send").disabled = true;
   try {
     webllm ??= await import(WEBLLM_URL);
     const onProgress = (r) => {
       const bar = $("bar"), txt = $("progress-text");
       if (bar) bar.style.width = `${Math.round((r.progress || 0) * 100)}%`;
       if (txt) txt.textContent = frenchProgress(r.text, r.progress);
+      if (quiet) setStatus(`♻️ Redémarrage de l'IA… ${Math.round((r.progress || 0) * 100)} %`);
     };
-    if (engine) {
-      engine.setInitProgressCallback(onProgress);
-      await engine.reload(id);
-    } else {
-      engine = await webllm.CreateMLCEngine(id, { initProgressCallback: onProgress });
-    }
+    // Toujours repartir d'un moteur neuf : un moteur coupé par le système
+    // (« Module has already been disposed ») ne peut pas être réutilisé.
+    const old = engine;
+    engine = null;
+    await old?.unload().catch(() => {});
+    engine = await webllm.CreateMLCEngine(id, { initProgressCallback: onProgress }, CHAT_OPTS);
     loadedModelId = id;
-    store.set("ready", true);
     $("input").disabled = false;
     $("send").disabled = false;
+    setStatus(null);
     renderHeader();
     renderThread();
-    $("input").focus();
+    if (!quiet) $("input").focus();
+    return true;
   } catch (e) {
     console.error(e);
     const msg = String(e?.message || e);
-    const memory = /memory|OOM|allocate|device lost|Device was lost/i.test(msg);
+    const memory = isEngineLost(msg) || /memory|OOM|allocate/i.test(msg);
     engine = null;
+    setStatus(null);
     showSetup({
-      title: memory ? "Ton téléphone manque de mémoire pour ce modèle" : "Le téléchargement a échoué",
+      title: memory ? "Ton téléphone manque de mémoire pour ce modèle" : "Le chargement a échoué",
       text: memory
-        ? "Choisis un modèle plus léger dans Réglages → Modèle (par exemple Qwen 2.5 0.5B), puis réessaie."
+        ? "Ferme les autres apps et onglets, ou choisis un modèle plus léger dans Réglages → Modèle (Qwen 2.5 0.5B), puis réessaie."
         : `Vérifie ta connexion puis réessaie. Détail : ${msg.slice(0, 200)}`,
       button: "Réessayer",
-      onClick: loadModel,
+      onClick: () => loadModel(),
     });
     $("sub").textContent = "Modèle non chargé";
+    return false;
   }
+}
+
+/** Le moteur a été coupé (mémoire libérée par le système, appli mise en arrière-plan…). */
+function isEngineLost(message) {
+  return /disposed|device (was )?lost|DeviceLost|GPUDevice|Instance reference no longer exists|out of memory/i.test(message);
 }
 
 function frenchProgress(text = "", progress = 0) {
@@ -396,8 +413,27 @@ function systemPrompt() {
   return `${settings.prompt.replaceAll("{nom}", settings.name)}\n\nNous sommes le ${today}.`;
 }
 
+async function streamReply(request, reply) {
+  const stream = await engine.chat.completions.create(request);
+  const thread = $("thread");
+  let el = thread.lastElementChild;
+  for await (const chunk of stream) {
+    const delta = chunk.choices[0]?.delta?.content;
+    if (!delta) continue;
+    reply.content += delta;
+    const next = bubble(reply);
+    el.replaceWith(next);
+    el = next;
+    thread.scrollTop = thread.scrollHeight;
+  }
+}
+
 async function send(text) {
-  if (!engine || generating || !text.trim()) return;
+  if (generating || !text.trim()) return;
+  if (!engine) {
+    // Moteur arrêté : on le relance avant d'envoyer.
+    if (!(await loadModel({ quiet: true }))) return;
+  }
   setError(null);
   generating = true;
   $("send").textContent = "Stop";
@@ -417,25 +453,26 @@ async function send(text) {
       ? `Informations trouvées sur Internet :\n\n${context.map((c, i) => `[${i + 1}] ${c.title}\n${c.text}`).join("\n\n")}\n\n---\nEn t'appuyant sur ces informations si elles sont utiles, réponds à : ${user.content}`
       : user.content;
 
-    const stream = await engine.chat.completions.create({
+    const request = {
       messages: [{ role: "system", content: systemPrompt() }, ...history, { role: "user", content: question }],
       temperature: settings.temperature,
       stream: true,
-    });
-    const thread = $("thread");
-    let el = thread.lastElementChild;
-    for await (const chunk of stream) {
-      const delta = chunk.choices[0]?.delta?.content;
-      if (!delta) continue;
-      reply.content += delta;
-      const next = bubble(reply);
-      el.replaceWith(next);
-      el = next;
-      thread.scrollTop = thread.scrollHeight;
+    };
+    try {
+      await streamReply(request, reply);
+    } catch (e) {
+      if (!isEngineLost(String(e?.message || e)) || reply.content) throw e;
+      // L'iPhone a coupé le moteur : on le relance (depuis le cache, sans retélécharger) et on réessaie une fois.
+      if (!(await loadModel({ quiet: true }))) return; // loadModel réaffiche le fil, bulle d'attente comprise
+      await streamReply(request, reply);
     }
   } catch (e) {
     console.error(e);
-    setError(`Erreur : ${String(e?.message || e).slice(0, 200)}`);
+    const msg = String(e?.message || e);
+    if (isEngineLost(msg)) {
+      engine = null;
+      setError("L'IA s'est arrêtée (mémoire du téléphone pleine). Renvoie ton message pour la relancer, ou choisis un modèle plus léger dans Réglages.");
+    } else setError(`Erreur : ${msg.slice(0, 200)}`);
   } finally {
     if (!reply.content) messages = messages.filter((m) => m !== reply);
     generating = false;
